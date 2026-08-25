@@ -48,3 +48,56 @@ python3 services/response.py           # demo composed responses
 - **Response composer** never invents facts — every number is interpolated from
   the catalog record (prices shown in "lakh", km with thousands separators).
   Handles no-results / 1 / 2–3 matches.
+
+---
+
+# VehicleVoice — Backend (FastAPI pipeline)
+
+One FastAPI app wiring the full search pipeline
+`nlu → conversation memory → search → ranking → response composer` with
+per-stage latency logging. STT/TTS and the React frontend are later tasks.
+
+## Layout (new since milestone 1)
+```
+backend/
+  main.py              FastAPI app: POST /api/voice, GET /health, static mount
+memory/
+  conversation.py      ConversationState, merge_slots, follow-up resolution,
+                       thread-safe in-memory SessionStore
+services/
+  nlu.py               deterministic fallback slot extractor (LLM lands later,
+                       same public interface: extract_slots() -> dict)
+logs/latency.log       appended per request (tab-delimited, per-stage + total)
+```
+
+## Run
+```bash
+.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 3000
+```
+Imports work from the repo root (the app also self-inserts the repo root onto
+`sys.path` so `uvicorn backend.main:app` works from any cwd).
+
+## API
+- `POST /api/voice` — body `{"session_id": "...", "transcript": "..."}`
+  returns `{session_id, transcript, slots (merged), selected_vehicle, results
+  (top 3), spoken, matched_count, latency_ms {nlu, merge, search, rank, compose,
+  stt, total}}`. Guaranteed to always speak a template-built answer, even with 0
+  results.
+- `GET /health` — `{"status": "ok", "version": "..."}`
+- `GET /` — serves `frontend/dist` when the React build exists, otherwise a
+  minimal inline placeholder page so the port-3000 site is never blank.
+
+## Multi-turn semantics (memory/conversation.py)
+- `merge_slots` — update-only-what's-provided: "only CNG" keeps earlier
+  budget/city and sets fuel.
+- `resolve_follow_up` — "show the first/second/third one" -> index into the last
+  result list, recorded on `selected_vehicle`.
+- Negation — "not diesel, CNG" replaces fuel (CNG wins), never AND-accumulates.
+
+## Tests
+```bash
+./.venv/bin/python -m pytest tests -q    # 32 tests: core (16) + memory + pipeline
+```
+`tests/test_pipeline.py` runs the API through FastAPI's TestClient and asserts
+the no-hallucination invariant: every number in the spoken answer traces back
+to a returned catalog record.
