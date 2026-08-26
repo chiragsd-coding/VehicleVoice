@@ -1,0 +1,138 @@
+/* VehicleVoice frontend — clean, functional, no framework. */
+:root {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --accent: #2563eb;
+  --accent-ink: #ffffff;
+  --ok: #16a34a;
+  --bad: #dc2626;
+  --warn: #b45309;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.page { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+
+.header { margin-bottom: 1.25rem; }
+.header h1 { margin: 0 0 .15rem; font-size: 1.9rem; letter-spacing: -.02em; }
+.tagline { margin: 0; color: var(--muted); }
+.meta-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-top: .5rem; font-size: .85rem; color: var(--muted); }
+.meta-row code { background: #eef2f7; padding: .1rem .35rem; border-radius: 6px; }
+.health { display: inline-block; padding: .15rem .55rem; border-radius: 999px; font-weight: 600; }
+.health.ok { background: #e7f6ee; color: var(--ok); }
+.health.bad { background: #fdecea; color: var(--bad); }
+.link-button { background: none; border: 1px solid var(--line); color: var(--accent); padding: .3rem .7rem; border-radius: 8px; cursor: pointer; font-size: .8rem; }
+.link-button:hover { background: #eef4ff; }
+.session { font-size: .8rem; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 2px rgba(15,23,42,.04);
+}
+.card h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* input */
+.ptt-row { margin-bottom: .85rem; }
+.mic-btn {
+  display: flex; align-items: center; gap: .6rem;
+  width: 100%; padding: .9rem 1rem;
+  background: var(--accent); color: var(--accent-ink);
+  border: none; border-radius: var(--radius);
+  font-size: 1rem; font-weight: 600; cursor: pointer;
+  justify-content: center;
+  transition: background .12s ease, transform .05s ease;
+  touch-action: none;
+}
+.mic-btn:hover { background: #1d4ed8; }
+.mic-btn.recording { background: var(--bad); }
+.mic-btn.converting { background: var(--warn); }
+.mic-btn:disabled { opacity: .7; cursor: default; }
+.mic-live { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { fill: #fff; } 50% { fill: #fca5a5; } }
+
+.input-row { display: flex; gap: .5rem; align-items: stretch; }
+textarea {
+  flex: 1; resize: vertical; padding: .6rem .7rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  font: inherit; color: var(--ink); background: #fbfdff;
+}
+textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.submit-btn {
+  padding: .6rem 1.1rem; border: none; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: 1rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.submit-btn:disabled { opacity: .6; cursor: default; }
+
+.hint { margin: .55rem 0 0; color: var(--muted); font-size: .88rem; }
+.hint.warn { color: var(--warn); }
+.hint-inline { color: var(--muted); font-weight: 400; font-size: .8rem; }
+.error { margin: .6rem 0 0; color: var(--bad); font-size: .88rem; }
+.quote { font-style: italic; color: var(--ink); margin: 0; }
+.spoken { margin: 0 0 .5rem; }
+
+.audio-player { width: 100%; margin-top: .35rem; opacity: .55; }
+.audio-player:not([src]) { pointer-events: none; }
+
+.badge {
+  display: inline-block; margin-left: .5rem; padding: .1rem .5rem;
+  border-radius: 999px; font-size: .72rem; font-weight: 600;
+  background: #eef2f7; color: var(--muted); vertical-align: middle;
+}
+.badge.verified { background: #e7f6ee; color: var(--ok); }
+.badge.unverified { background: #fef3c7; color: var(--warn); }
+.badge-audio { background: #eef4ff; color: var(--accent); }
+
+/* slots */
+.slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .6rem; }
+.slot { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; }
+.slot.unset { background: #f8fafc; }
+.slot-label { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.slot-value { font-weight: 600; }
+.slot.unset .slot-value { color: var(--muted); font-weight: 400; }
+
+/* results */
+.results { display: grid; grid-template-columns: 1fr; gap: .7rem; }
+.result-card { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: .7rem .85rem; }
+.result-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .35rem; }
+.rank { color: var(--muted); font-size: .8rem; font-weight: 600; }
+.name { font-size: 1.08rem; font-weight: 700; }
+.result-meta { display: flex; flex-wrap: wrap; gap: .3rem 1rem; color: var(--muted); font-size: .9rem; }
+.result-meta .price { color: var(--ink); font-weight: 700; font-size: 1rem; }
+
+/* latency */
+.latency { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: .5rem; }
+.latency-row { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .6rem; }
+.latency-name { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.latency-ms { font-weight: 600; }
+.total { margin: .6rem 0 0; color: var(--muted); font-size: .9rem; }
+.total strong { color: var(--ink); }
+
+/* turns */
+.turns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.turns li { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px dashed var(--line); padding-bottom: .4rem; }
+.turn-q { font-style: italic; color: var(--ink); }
+.turn-count { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+
+.placeholder-card { color: var(--muted); }
+.placeholder-card em { color: var(--ink); }
+
+.footer { margin-top: 1rem; color: var(--muted); font-size: .8rem; text-align: center; }
