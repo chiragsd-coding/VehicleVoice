@@ -1,0 +1,9 @@
+# VehicleVoice backend runtime dependencies
+fastapi
+uvicorn[standard]
+pydantic
+
+# Dev / test dependencies
+pytest
+httpx          # required by fastapi TestClient
+faker          # optional: richer catalog variety (catalog itself is stdlib-only)
