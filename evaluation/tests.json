@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "description": "Deterministic, keyless evaluation cases for the VehicleVoice fallback pipeline.",
+  "catalog_assumptions": {
+    "seed": 42,
+    "rows": 120,
+    "generator": "database/generate_catalog.py",
+    "ranking_top_n": 3
+  },
+  "cases": [
+    {
+      "id": "mini-truck-budget-city",
+      "description": "Extract body, budget, and city; return the only matching catalog row.",
+      "turns": [
+        {
+          "transcript": "mini truck under 5 lakh in Mumbai",
+          "expect": {
+            "slots": {
+              "budget": 500000,
+              "fuel": null,
+              "body_type": "mini truck",
+              "city": "Mumbai",
+              "purpose": null
+            },
+            "matched_count": {"exact": 1},
+            "result_ids": [48],
+            "result_constraints": {
+              "fuel": "Diesel",
+              "body_type": "mini truck",
+              "city": "Mumbai",
+              "max_price": 500000
+            },
+            "selected_vehicle": null,
+            "spoken": {
+              "contains": ["Ace Gold", "₹1.2 lakh", "173,368 km"],
+              "grounded": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "cng-mini-trucks-ranking",
+      "description": "Filter CNG mini trucks and preserve deterministic top-three ranking.",
+      "turns": [
+        {
+          "transcript": "CNG mini trucks",
+          "expect": {
+            "slots": {
+              "budget": null,
+              "fuel": "CNG",
+              "body_type": "mini truck",
+              "city": null,
+              "purpose": null
+            },
+            "matched_count": {"min": 3},
+            "result_ids": [110, 59, 7],
+            "result_constraints": {
+              "fuel": "CNG",
+              "body_type": "mini truck"
+            },
+            "selected_vehicle": null,
+            "spoken": {
+              "contains": ["Ace", "Jeeto", "Jeeto Plus"],
+              "grounded": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "electric-no-results",
+      "description": "Unsupported catalog fuel returns an honest empty result instead of an invented match.",
+      "turns": [
+        {
+          "transcript": "an electric mini truck in mumbai",
+          "expect": {
+            "slots": {
+              "budget": null,
+              "fuel": "Electric",
+              "body_type": "mini truck",
+              "city": "Mumbai",
+              "purpose": null
+            },
+            "matched_count": {"exact": 0},
+            "result_ids": [],
+            "result_constraints": {},
+            "selected_vehicle": null,
+            "spoken": {
+              "contains": ["no matching", "Mumbai"],
+              "grounded": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi-turn-memory-and-selection",
+      "description": "Carry search slots across turns and resolve a follow-up ordinal.",
+      "turns": [
+        {
+          "transcript": "CNG mini trucks",
+          "expect": {
+            "slots": {
+              "budget": null,
+              "fuel": "CNG",
+              "body_type": "mini truck",
+              "city": null,
+              "purpose": null
+            },
+            "matched_count": {"min": 3},
+            "result_ids": [110, 59, 7],
+            "result_constraints": {"fuel": "CNG", "body_type": "mini truck"},
+            "selected_vehicle": null,
+            "spoken": {"grounded": true}
+          }
+        },
+        {
+          "transcript": "show the first one",
+          "expect": {
+            "slots": {
+              "budget": null,
+              "fuel": "CNG",
+              "body_type": "mini truck",
+              "city": null,
+              "purpose": null
+            },
+            "matched_count": {"min": 3},
+            "result_ids": [110, 59, 7],
+            "result_constraints": {"fuel": "CNG", "body_type": "mini truck"},
+            "selected_vehicle": 0,
+            "spoken": {"contains": ["Ace"], "grounded": true}
+          }
+        }
+      ]
+    },
+    {
+      "id": "negated-fuel-replacement",
+      "description": "Ignore a negated fuel mention and use the positive replacement filter.",
+      "turns": [
+        {
+          "transcript": "not diesel, CNG mini truck",
+          "expect": {
+            "slots": {
+              "budget": null,
+              "fuel": "CNG",
+              "body_type": "mini truck",
+              "city": null,
+              "purpose": null
+            },
+            "matched_count": {"min": 3},
+            "result_constraints": {"fuel": "CNG", "body_type": "mini truck"},
+            "selected_vehicle": null,
+            "spoken": {"grounded": true}
+          }
+        }
+      ]
+    },
+    {
+      "id": "body-fuel-city-aliases",
+      "description": "Combine structured body, fuel, and city filters.",
+      "turns": [
+        {
+          "transcript": "petrol hatchback in Pune",
+          "expect": {
+            "slots": {
+              "budget": null,
+              "fuel": "Petrol",
+              "body_type": "hatchback",
+              "city": "Pune",
+              "purpose": null
+            },
+            "matched_count": {"exact": 1},
+            "result_ids": [73],
+            "result_constraints": {
+              "fuel": "Petrol",
+              "body_type": "hatchback",
+              "city": "Pune"
+            },
+            "selected_vehicle": null,
+            "spoken": {"contains": ["Grand i10", "Petrol"], "grounded": true}
+          }
+        }
+      ]
+    },
+    {
+      "id": "van-delivery-budget",
+      "description": "Parse a commercial body and budget while keeping purpose informational.",
+      "turns": [
+        {
+          "transcript": "van for delivery services in pune below 4 lakh",
+          "expect": {
+            "slots": {
+              "budget": 400000,
+              "fuel": null,
+              "body_type": "van",
+              "city": "Pune",
+              "purpose": null
+            },
+            "matched_count": {"exact": 1},
+            "result_ids": [58],
+            "result_constraints": {
+              "body_type": "van",
+              "city": "Pune",
+              "max_price": 400000
+            },
+            "selected_vehicle": null,
+            "spoken": {"contains": ["Winger", "₹1.2 lakh"], "grounded": true}
+          }
+        }
+      ]
+    }
+  ]
+}
