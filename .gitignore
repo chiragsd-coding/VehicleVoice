@@ -1,4 +1,5 @@
 # Ignore Python virtualenv and bytecode caches
+.venv
 .venv/
 __pycache__/
 *.pyc
