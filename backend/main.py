@@ -5,26 +5,32 @@ One app, clearly separated service modules, exactly the pipeline from the
 business plan:
 
     (stt)  -> nlu.extract_slots -> conversation.merge -> search ->
-              ranking.top_n(3) -> response.compose_response -> json
+              ranking.top_n(3) -> response.compose_response -> json -> (tts)
 
 Endpoints
 ---------
-POST /api/voice   {session_id, transcript} -> merged slots, top-3 records,
-                  spoken answer, per-stage latency ms. Latency is appended to
-                  logs/latency.log (tab-delimited, one summary line per request).
-GET  /health      {"status": "ok", "version": ...}
-GET  /            served from frontend/dist if it exists, else a minimal inline
-                  placeholder page so the port-3000 site is never blank. The
-                  React push-to-talk UI is a LATER task -- this mount just needs
-                  to work when the dist folder appears.
+POST /api/voice        {session_id, transcript} -> merged slots, top-3 records,
+                       spoken answer, per-stage latency ms. The JSON-transcript
+                       path (typed input) is unchanged.
+POST /api/voice        multipart (session_id, audio file) -> same payload shape,
+                       but the transcript comes from services/stt.py
+                       (faster-whisper, local). stt stage latency is filled in
+                       and a `stt` metadata block is attached.
+POST /api/voice/audio  identical multipart handler (what the React UI posts to).
+POST /api/tts          {text} -> mp3 bytes from services/tts.py (edge-tts). On
+                       TTSError returns 200 JSON {"status": "tts_unavailable",
+                       "spoken_text": <text>} so the UI can degrade gracefully.
+GET  /health           {"status": "ok", "version": ..., "adapters": {...}}
+GET  /                 served from frontend/dist if it exists, else a minimal
+                       inline placeholder page.
+
+Latency is appended to logs/latency.log (tab-delimited, one summary line per
+request) with per-stage breakdown (stt when voice, nlu, merge, search, rank,
+compose; tts on /api/tts calls).
 
 Run:
     cd <repo root>
     .venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 3000
-
-STT and TTS are not wired yet: the endpoint takes raw transcripts and returns
-text; audio I/O is a later milestone. The latency logger includes a 'stt' stage
-placeholder of 0.0 so the breakdown shape is stable when STT lands.
 """
 from __future__ import annotations
 
@@ -41,16 +47,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from fastapi import FastAPI, HTTPException, Request          # noqa: E402
-from fastapi.responses import FileResponse, HTMLResponse     # noqa: E402
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles                  # noqa: E402
 from pydantic import BaseModel                               # noqa: E402
 
 from database import db                                     # noqa: E402
 from memory import conversation                              # noqa: E402
 from services import nlu, ranking, response as response_mod, search  # noqa: E402
+from services import stt as stt_mod, tts as tts_mod          # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TOP_N = 3
 MAX_TRANSCRIPT = 500  # guard against runaway input
 
@@ -73,22 +80,34 @@ class VoiceRequest(BaseModel):
     transcript: str = ""
 
 
+class TTSRequest(BaseModel):
+    session_id: str = ""
+    text: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Latency logger
 # ---------------------------------------------------------------------------
+_STAGE_ORDER = ("stt", "nlu", "merge", "search", "rank", "compose", "tts")
+
+
 def log_latency(session_id: str, transcript: str, timings: dict) -> None:
-    """Append one tab-delimited summary line (total + per-stage) to latency.log."""
+    """Append one tab-delimited summary line (per-stage + total) to latency.log.
+
+    Stages are emitted in pipeline order for whichever keys are present, so the
+    voice path (stt) and the TTS side-call (tts) fit the same log shape.
+    """
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
+        stages = "\t".join(
+            f"{name}={timings[name]:.1f}ms" for name in _STAGE_ORDER if name in timings
+        )
+        total = sum(v for k, v in timings.items() if k != "total")
         row = (
             f"{datetime.now().isoformat(timespec='milliseconds')}"
             f"\t{session_id}\t{transcript}"
-            f"\tnlu={timings['nlu']:.1f}ms"
-            f"\tmerge={timings['merge']:.1f}ms"
-            f"\tsearch={timings['search']:.1f}ms"
-            f"\trank={timings['rank']:.1f}ms"
-            f"\tcompose={timings['compose']:.1f}ms"
-            f"\ttotal={sum(timings.values()):.1f}ms\n"
+            + (f"\t{stages}" if stages else "")
+            + f"\ttotal={total:.1f}ms\n"
         )
         with _LATENCY_LOCK, open(LATENCY_LOG, "a") as fh:
             fh.write(row)
@@ -99,11 +118,15 @@ def log_latency(session_id: str, transcript: str, timings: dict) -> None:
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-def run_pipeline(session_id: str, transcript: str) -> dict:
-    """Execute the full search pipeline for one turn. Returns the API payload."""
+def run_pipeline(session_id: str, transcript: str, stt_ms: float = 0.0) -> dict:
+    """Execute the full search pipeline for one turn. Returns the API payload.
+
+    stt_ms: wall time of the speech-to-text stage when this turn arrived as
+    audio (0.0 for typed transcripts) -- included in the reported total.
+    """
     state = _STORE.get(session_id)
-    timings: dict = {"nlu": 0.0, "merge": 0.0, "search": 0.0, "rank": 0.0,
-                     "compose": 0.0, "stt": 0.0}  # stt reserved for later
+    timings: dict = {"stt": stt_ms, "nlu": 0.0, "merge": 0.0, "search": 0.0,
+                     "rank": 0.0, "compose": 0.0}
 
     t0 = time.perf_counter()
 
@@ -128,7 +151,7 @@ def run_pipeline(session_id: str, transcript: str) -> dict:
     spoken = response_mod.compose_response(top, state.slots)
     timings["compose"] = (time.perf_counter() - t) * 1000
 
-    timings["total"] = (time.perf_counter() - t0) * 1000
+    timings["total"] = (time.perf_counter() - t0) * 1000 + stt_ms
 
     log_latency(session_id, transcript, timings)
 
@@ -145,15 +168,85 @@ def run_pipeline(session_id: str, transcript: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Voice audio -> STT -> pipeline (shared by /api/voice multipart & /api/voice/audio)
+# ---------------------------------------------------------------------------
+async def _voice_audio_turn(session_id: str, audio: UploadFile) -> dict:
+    sid = (session_id or "").strip() or str(uuid.uuid4())
+    if not stt_mod.is_available():
+        return JSONResponse(
+            status_code=503,
+            content={"status": "stt_unavailable",
+                     "message": "faster-whisper is not installed on the server"},
+        )
+    try:
+        audio_bytes = await audio.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not read audio upload: {exc!r}")
+
+    try:
+        t = time.perf_counter()
+        stt_out = stt_mod.transcribe(audio_bytes)
+        stt_ms = (time.perf_counter() - t) * 1000
+    except stt_mod.STTError as exc:
+        _LOGGER.warning("stt failed: %s", exc)
+        raise HTTPException(status_code=400,
+                            detail={"status": "stt_error", "message": str(exc)})
+
+    transcript = (stt_out.get("text") or "").strip()[:MAX_TRANSCRIPT]
+    if not transcript:
+        raise HTTPException(status_code=400,
+                            detail={"status": "no_speech",
+                                    "message": "speech-to-text returned an empty transcript"})
+
+    try:
+        payload = run_pipeline(sid, transcript, stt_ms=stt_ms)
+    except Exception as exc:  # keep the API up; surface a clean error
+        _LOGGER.exception("pipeline failed for session %s", sid)
+        raise HTTPException(status_code=500, detail=f"pipeline error: {exc!r}")
+
+    # Honest STT metadata alongside the pipeline payload.
+    payload["stt"] = {
+        "model": stt_out.get("model"),
+        "language": stt_out.get("language"),
+        "audio_duration_s": stt_out.get("duration"),
+        "latency_ms": round(stt_ms, 1),
+    }
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": VERSION}
+    return {
+        "status": "ok",
+        "version": VERSION,
+        "adapters": {
+            "stt": stt_mod.is_available(),
+            "tts": tts_mod.is_configured(),
+        },
+    }
 
 
 @app.post("/api/voice")
-def voice(req: VoiceRequest):
+async def voice(request: Request):
+    """Typed transcript (JSON) or mic audio (multipart) -- same response shape."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    if content_type.startswith("multipart/"):
+        form = await request.form()
+        audio = form.get("audio")
+        if audio is None or isinstance(audio, str):
+            raise HTTPException(status_code=400,
+                                detail={"status": "stt_error",
+                                        "message": "multipart field 'audio' is required"})
+        return await _voice_audio_turn(str(form.get("session_id") or ""), audio)
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON body: {exc!r}")
+    req = VoiceRequest(**body)
     session_id = req.session_id.strip() or str(uuid.uuid4())
     transcript = (req.transcript or "").strip()[:MAX_TRANSCRIPT]
     try:
@@ -161,6 +254,43 @@ def voice(req: VoiceRequest):
     except Exception as exc:  # keep the API up; surface a clean error
         _LOGGER.exception("pipeline failed for session %s", session_id)
         raise HTTPException(status_code=500, detail=f"pipeline error: {exc!r}")
+
+
+@app.post("/api/voice/audio")
+async def voice_audio(session_id: str = Form(""), audio: UploadFile = File(...)):
+    """Mic upload path used by the React push-to-talk UI (multipart form)."""
+    return await _voice_audio_turn(session_id, audio)
+
+
+@app.post("/api/tts")
+async def tts(req: TTSRequest):
+    """Synthesize the spoken answer to mp3.
+
+    Honest-fallback contract (services/tts.py): on any synthesis failure the
+    caller gets 200 JSON {"status": "tts_unavailable", "spoken_text": ...} --
+    never fake audio -- so the UI can keep showing the text.
+    """
+    text = (req.text or "").strip()[:tts_mod.MAX_TEXT]
+    if not text:
+        raise HTTPException(status_code=400,
+                            detail={"status": "tts_error", "message": "empty text"})
+    if not tts_mod.is_configured():
+        return JSONResponse({"status": "tts_unavailable", "spoken_text": text,
+                             "message": "edge-tts is not installed on the server"})
+
+    t = time.perf_counter()
+    try:
+        mp3 = await tts_mod.synthesize_async(text)
+    except tts_mod.TTSError as exc:
+        _LOGGER.warning("tts unavailable: %s", exc)
+        return JSONResponse({"status": "tts_unavailable", "spoken_text": text,
+                             "message": str(exc)})
+    tts_ms = (time.perf_counter() - t) * 1000
+    log_latency(req.session_id.strip() or "tts", f"[tts] {text[:60]}", {"tts": tts_ms})
+
+    return Response(content=mp3, media_type="audio/mpeg",
+                    headers={"Content-Length": str(len(mp3)),
+                             "Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------------------

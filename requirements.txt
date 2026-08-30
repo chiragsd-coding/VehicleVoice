@@ -6,6 +6,7 @@ pydantic
 # Voice adapters (the local, keyless voice loop)
 faster-whisper # STT: local speech-to-text for services/stt.py
 edge-tts       # TTS: free Microsoft neural voices, no API key, for services/tts.py
+python-multipart # multipart/form-data parsing for the /api/voice audio upload
 
 # Dev / test dependencies
 pytest
