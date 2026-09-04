@@ -33,7 +33,7 @@ from typing import Optional
 
 _LOGGER = logging.getLogger("vehiclevoice.stt")
 
-MODEL_NAME = os.environ.get("STT_MODEL", "tiny")
+MODEL_NAME = os.environ.get("STT_MODEL", "small")
 DEVICE = os.environ.get("STT_DEVICE", "cpu")
 COMPUTE_TYPE = os.environ.get("STT_COMPUTE_TYPE", "int8")
 LANGUAGE = os.environ.get("STT_LANGUAGE", "en")
