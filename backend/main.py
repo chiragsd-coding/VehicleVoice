@@ -34,6 +34,7 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -118,7 +119,7 @@ def log_latency(session_id: str, transcript: str, timings: dict) -> None:
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-def run_pipeline(session_id: str, transcript: str, stt_ms: float = 0.0) -> dict:
+async def run_pipeline(session_id: str, transcript: str, stt_ms: float = 0.0) -> dict:
     """Execute the full search pipeline for one turn. Returns the API payload.
 
     stt_ms: wall time of the speech-to-text stage when this turn arrived as
@@ -126,7 +127,7 @@ def run_pipeline(session_id: str, transcript: str, stt_ms: float = 0.0) -> dict:
     """
     state = _STORE.get(session_id)
     timings: dict = {"stt": stt_ms, "nlu": 0.0, "merge": 0.0, "search": 0.0,
-                     "rank": 0.0, "compose": 0.0}
+                     "rank": 0.0, "compose": 0.0, "tts": 0.0}
 
     t0 = time.perf_counter()
 
@@ -151,6 +152,28 @@ def run_pipeline(session_id: str, transcript: str, stt_ms: float = 0.0) -> dict:
     spoken = response_mod.compose_response(top, state.slots)
     timings["compose"] = (time.perf_counter() - t) * 1000
 
+    # Generate TTS audio if edge-tts is available
+    audio_url = None
+    if tts_mod.is_configured():
+        try:
+            t = time.perf_counter()
+            mp3_bytes = await tts_mod.synthesize_async(spoken)
+            tts_ms = (time.perf_counter() - t) * 1000
+            timings["tts"] = tts_ms
+            
+            # Save audio to a temporary file and return URL
+            audio_filename = f"{session_id}_{int(t0 * 1000)}.mp3"
+            audio_path = os.path.join(ROOT, "static", "audio", audio_filename)
+            os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+            with open(audio_path, "wb") as f:
+                f.write(mp3_bytes)
+            
+            # Audio URL relative to frontend
+            audio_url = f"/audio/{audio_filename}"
+        except tts_mod.TTSError as exc:
+            _LOGGER.warning("tts failed: %s", exc)
+            # Continue without audio; spoken text is still returned
+
     timings["total"] = (time.perf_counter() - t0) * 1000 + stt_ms
 
     log_latency(session_id, transcript, timings)
@@ -163,6 +186,7 @@ def run_pipeline(session_id: str, transcript: str, stt_ms: float = 0.0) -> dict:
         "results": top,
         "matched_count": len(matches),
         "spoken": spoken,
+        "audio_url": audio_url,
         "latency_ms": timings,
     }
 
@@ -199,7 +223,7 @@ async def _voice_audio_turn(session_id: str, audio: UploadFile) -> dict:
                                     "message": "speech-to-text returned an empty transcript"})
 
     try:
-        payload = run_pipeline(sid, transcript, stt_ms=stt_ms)
+        payload = await run_pipeline(sid, transcript, stt_ms=stt_ms)
     except Exception as exc:  # keep the API up; surface a clean error
         _LOGGER.exception("pipeline failed for session %s", sid)
         raise HTTPException(status_code=500, detail=f"pipeline error: {exc!r}")
@@ -250,7 +274,7 @@ async def voice(request: Request):
     session_id = req.session_id.strip() or str(uuid.uuid4())
     transcript = (req.transcript or "").strip()[:MAX_TRANSCRIPT]
     try:
-        return run_pipeline(session_id, transcript)
+        return await run_pipeline(session_id, transcript)
     except Exception as exc:  # keep the API up; surface a clean error
         _LOGGER.exception("pipeline failed for session %s", session_id)
         raise HTTPException(status_code=500, detail=f"pipeline error: {exc!r}")
@@ -337,6 +361,11 @@ if os.path.isdir(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 else:
     app.get("/")(_placeholder)
+
+# Static audio files for TTS playback
+AUDIO_DIR = os.path.join(ROOT, "static", "audio")
+os.makedirs(AUDIO_DIR, exist_ok=True)
+app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 
 
 # Make the SQLite catalog exist (idempotent) at import time so the app is

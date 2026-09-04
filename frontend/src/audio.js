@@ -21,17 +21,21 @@ export async function startRecording(onTick = () => {}) {
     throw new Error('Microphone recording not supported in this browser')
   }
   stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : ''
-  recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+  // Use MediaRecorder without specifying codec - Firefox may not support codec spec
+  recorder = new MediaRecorder(stream)
   chunks = []
+  
+  // Handle dataavailable with proper null check
   recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) chunks.push(e.data)
+    console.log('ondataavailable called, size:', e.data?.size)
+    if (e.data && e.data.size > 0) {
+      chunks.push(e.data)
+    }
   }
-  recorder.start(250)
+  
+  recorder.start()
   let secs = 0
-  tickTimer = setInterval(() => { secs += 0.25; onTick(secs) }, 250)
+  tickTimer = setInterval(() => { secs += 0.1; onTick(secs) }, 100)
 }
 
 export async function stopRecording() {
@@ -40,22 +44,53 @@ export async function stopRecording() {
   const rec = recorder
   recorder = null
   return new Promise((resolve, reject) => {
+    let stopped = false
+    
+    // Wait for data to be flushed before stopping
+    const flushAndStop = () => {
+      if (stopped) return
+      stopped = true
+      
+      setTimeout(() => {
+        try {
+          rec.stop()
+        } catch (err) {
+          stopTracks()
+          reject(err)
+        }
+      }, 50) // Give data time to flush
+    }
+    
     rec.onstop = async () => {
       try {
-        stopTracks()
-        const raw = new Blob(chunks, { type: rec.mimeType || 'audio/webm' })
-        resolve(await toWav(raw))
+        // Use the actual MIME type from the recorder if available
+        const mimeType = rec.mimeType || 'audio/webm'
+        const raw = new Blob(chunks, { type: mimeType })
+        console.log('Recording stopped, MIME type:', mimeType, 'Blob size:', raw.size, 'Chunks:', chunks.length)
+        resolve(await toWav(raw, mimeType))
       } catch (err) {
+        console.error('Failed to convert recording:', err)
         reject(err)
+      } finally {
+        stopTracks()
       }
     }
-    rec.onerror = (e) => { stopTracks(); reject(e.error || new Error('recorder error')) }
-    try {
-      rec.stop()
-    } catch (err) {
-      stopTracks()
-      reject(err)
+    
+    rec.onerror = (e) => {
+      console.error('Recorder error:', e)
+      if (!stopped) {
+        stopped = true
+        stopTracks()
+      }
+      reject(e.error || new Error('recorder error'))
     }
+    
+    // Use a timeout to ensure we stop even if data doesn't flush
+    setTimeout(() => {
+      if (!stopped) flushAndStop()
+    }, 300) // Stop after 300ms of inactivity
+    
+    flushAndStop()
   })
 }
 
@@ -77,10 +112,11 @@ function stopTracks() {
 }
 
 // ---- WAV transcoding -----------------------------------------------------
-async function toWav(blob) {
-  const AudioCtx = window.AudioContext || window.webkitAudioContext
-  if (!AudioCtx) throw new Error('AudioContext unavailable')
-  const ctx = new AudioCtx()
+async function toWav(blob, mimeType = 'audio/webm') {
+  const AudioContext = window.AudioContext || window.webkitAudioContext
+  if (!AudioContext) throw new Error('AudioContext unavailable')
+  const ctx = new AudioContext()
+  
   try {
     const arrayBuffer = await blob.arrayBuffer()
     const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
@@ -93,9 +129,11 @@ async function toWav(blob) {
       for (let i = 0; i < len; i++) interleaved[i * numCh + ch] = data[i]
     }
     return encodeWav(interleaved, numCh, sampleRate)
-  } finally {
-    ctx.close()
+  } catch (err) {
+    throw err
   }
+  // Don't close ctx - the browser will clean it up eventually
+  // Closing it immediately causes "detached buffer" errors
 }
 
 function encodeWav(samples, numChannels, sampleRate) {

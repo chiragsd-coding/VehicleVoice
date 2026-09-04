@@ -103,8 +103,10 @@ export default function App() {
     try {
       const wav = await stopRecording()
       setRecSecs(0)
+      console.log('WAV blob size:', wav.size, 'type:', wav.type)
       await uploadWav(wav)
     } catch (err) {
+      console.error('Voice recording failed:', err)
       setError(`Voice capture failed: ${err.message}. Type your query below.`)
       setMicState('idle')
     }
@@ -116,11 +118,11 @@ export default function App() {
       const data = await postVoiceAudio(sessionId, wav)
       setResponse(data)
       setTurnHistory((h) => [data, ...h])
+      // audio_url will be set if TTS succeeded, otherwise spoken text is still shown
       if (data.audio_url) setSpeechUrl(data.audio_url)
+      else setSpeechUrl(null)
     } catch (err) {
       setMicState('idle')
-      // 404 / connection error: STT endpoint not wired yet — keep the app
-      // usable with typed text.
       setError(
         'Voice audio was recorded but speech-to-text is not wired to the backend yet. ' +
           `(${err.message}) Type your query below — the mic sends WAV to /api/voice/audio ` +
@@ -231,28 +233,18 @@ export default function App() {
                 <p className="quote">“{response.transcript}”</p>
               </div>
               <div className="card">
-                <h2>
-                  Spoken response
-                  {speechUrl && (
-                    <span className="badge badge-audio" title="TTS audio is now wired">
-                      TTS
-                    </span>
-                  )}
-                </h2>
+                <h2>Spoken response</h2>
                 <p className="spoken">{response.spoken}</p>
-                {/* Audio playback slots in here when TTS lands: the backend
-                    returns an audio_url (or we fetch /api/tts?text=…). Disabled
-                    until then, per the no-keys/free-TTS milestone. */}
                 <audio
                   controls
                   className="audio-player"
-                  src={speechUrl || undefined}
-                  aria-label="Spoken answer playback (enabled when TTS is wired)"
+                  src={response.audio_url || undefined}
+                  aria-label="Spoken answer playback"
                 >
                   <track kind="captions" />
                 </audio>
-                {!speechUrl && (
-                  <p className="hint">Audio playback is disabled until the TTS milestone; the text above is what will be spoken.</p>
+                {!response.audio_url && (
+                  <p className="hint">Audio synthesis unavailable; the text above is what will be spoken.</p>
                 )}
               </div>
             </section>
@@ -296,15 +288,16 @@ export default function App() {
                 Latency <span className="hint-inline">(per-stage, from latency_ms)</span>
               </h2>
               <div className="latency">
+                <LatencyBar name="stt" ms={response.latency_ms?.stt} />
                 <LatencyBar name="nlu" ms={response.latency_ms?.nlu} />
                 <LatencyBar name="merge" ms={response.latency_ms?.merge} />
                 <LatencyBar name="search" ms={response.latency_ms?.search} />
                 <LatencyBar name="rank" ms={response.latency_ms?.rank} />
                 <LatencyBar name="compose" ms={response.latency_ms?.compose} />
-                <LatencyBar name="stt" ms={response.latency_ms?.stt} placeholder="not wired" />
+                <LatencyBar name="tts" ms={response.latency_ms?.tts} />
               </div>
               <p className="total">
-                total <strong>{(response.latency_ms?.total ?? 0).toFixed(1)} ms</strong> · stt stage is a 0.0 placeholder until STT lands
+                total <strong>{(response.latency_ms?.total ?? 0).toFixed(1)} ms</strong>
               </p>
             </section>
 
